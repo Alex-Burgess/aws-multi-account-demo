@@ -1,0 +1,163 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Logging and alerting for suspicious account activity, e.g. failed console login attempts.  Must exist in us-east-1 (N. Virgina) region.
+Parameters:
+  EmailAddress:
+    Description: "Email address to notify when new logs are published."
+    Type: String
+  BucketName:
+    Description: "Bucket name, that is used as a unique name for resources."
+    Type: String
+    Default: alex-org-account-monitor
+  TrailName:
+    Description: "CouldTrail name, that is used as a unique name for resources."
+    Type: String
+    Default: AlexOrgAccountMonitor
+  OrgId:
+    Description: "The organizations ID which is used in the CloudWatch Policy."
+    Type: String
+
+
+Resources:
+  S3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref BucketName
+      AccessControl: Private
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: CloudTrail management logs expiration
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+            ExpirationInDays: 30
+            Prefix: AWSLogs/
+            Status: Enabled
+
+  BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket:
+        Ref: S3Bucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          -
+            Sid: "AWSCloudTrailAclCheck"
+            Effect: "Allow"
+            Principal:
+              Service: "cloudtrail.amazonaws.com"
+            Action: "s3:GetBucketAcl"
+            Resource:
+              !Sub |-
+                arn:aws:s3:::${S3Bucket}
+          -
+            Sid: "AWSCloudTrailWrite"
+            Effect: "Allow"
+            Principal:
+              Service: "cloudtrail.amazonaws.com"
+            Action: "s3:PutObject"
+            Resource:
+              !Sub |-
+                arn:aws:s3:::${S3Bucket}/AWSLogs/${AWS::AccountId}/*
+            Condition:
+              StringEquals:
+                s3:x-amz-acl: "bucket-owner-full-control"
+
+  OrganizationsApiTrail:
+    Type: AWS::CloudTrail::Trail
+    DependsOn:
+        - BucketPolicy
+    Properties:
+      TrailName: !Ref TrailName
+      S3BucketName: !Ref S3Bucket
+      IsLogging: true
+      IsMultiRegionTrail: true
+      IncludeGlobalServiceEvents: true
+      IsOrganizationTrail: true
+      CloudWatchLogsRoleArn: !GetAtt CloudTrailRole.Arn
+      CloudWatchLogsLogGroupArn: !GetAtt LogGroup.Arn
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "${TrailName}-Logs"
+      RetentionInDays: 180
+
+  RootConsoleMetricFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref LogGroup
+      FilterPattern: '{$.userIdentity.type = "Root" && $.eventName = "ConsoleLogin"}'
+      MetricTransformations:
+      - MetricValue: '1'
+        MetricNamespace: !Sub "${TrailName}/AccountAccessMonitoring"
+        MetricName: RootConsoleLogin
+
+  RootConsoleLoginAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: !Sub "Root Console Access Detected (Quick Log link: https://${AWS::Region}.console.aws.amazon.com/cloudwatch/home#logEventViewer:group=${LogGroup};filter=%7B%24.eventName%3D%22ConsoleLogin%22%7D)"
+      AlarmName: !Sub "${TrailName}-RootConsoleAccess"
+      ComparisonOperator: GreaterThanThreshold
+      EvaluationPeriods: 1
+      Threshold: 0
+      Namespace: !Sub "${TrailName}/AccountAccessMonitoring"
+      MetricName: RootConsoleLogin
+      Statistic: Maximum
+      Period: 60
+      TreatMissingData: notBreaching
+      ActionsEnabled: true
+      AlarmActions:
+      - !Ref AlarmSNSTopic
+
+  AlarmSNSTopic:
+    Type: "AWS::SNS::Topic"
+    Properties:
+      TopicName: !Sub "${TrailName}-Alerts"
+      Subscription:
+        -
+          Endpoint: !Ref EmailAddress
+          Protocol: "email"
+
+  CloudTrailRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${TrailName}_CloudTrail_Role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          -
+            Effect: "Allow"
+            Principal:
+              Service:
+                - "cloudtrail.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      Path: "/"
+      Policies:
+       - PolicyName: "CloudWatch"
+         PolicyDocument:
+           Version: "2012-10-17"
+           Statement:
+             - Effect: "Allow"
+               Action:
+                - logs:CreateLogStream
+               Resource:
+                - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:${LogGroup}:log-stream:${AWS::AccountId}_CloudTrail_*"
+                - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:${LogGroup}:log-stream:${OrgId}_*"
+             - Effect: "Allow"
+               Action:
+                - logs:PutLogEvents
+               Resource:
+                - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:${LogGroup}:log-stream:${AWS::AccountId}_CloudTrail_*"
+                - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:${LogGroup}:log-stream:${OrgId}_*"
+
+Outputs:
+  RootConsoleAuthLogsURL:
+    Description: "CloudWatch logs for Root console access"
+    # Value: !Sub "https://${AWS::Region}.console.aws.amazon.com/cloudwatch/home#logEventViewer:group=${LogGroup};filter=%7B%24.eventName%3D%22ConsoleLogin%22%7D"
+    Value: !Sub "https://${AWS::Region}.console.aws.amazon.com/cloudwatch/home#logEventViewer:group=${LogGroup};filter=%7B%24.eventName%3D%22ConsoleLogin%22%20%26%26%20%24.userIdentity.type%3D%22Root%22%7D"

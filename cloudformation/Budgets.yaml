@@ -1,0 +1,104 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: 'Consolidated Billing Alerts for AWS Account'
+
+Parameters:
+  EmailAddress:
+    Type: String
+  PhoneNumber:
+    Type: String
+
+Resources:
+  TextAlertTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: "Billing-Alerts"
+      DisplayName: "AlexBudgetAlert"
+      Subscription:
+      - Endpoint: !Ref PhoneNumber
+        Protocol: sms
+
+  TextAlertTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          -
+            Sid: "AWSBudgetsSNSPublishingPermissions"
+            Effect: "Allow"
+            Principal:
+              Service: "budgets.amazonaws.com"
+            Action: "SNS:Publish"
+            Resource: !Ref TextAlertTopic
+      Topics:
+        - !Ref TextAlertTopic
+
+
+  Budget20:
+    Type: "AWS::Budgets::Budget"
+    Properties:
+      Budget:
+        BudgetName: "$20 Monthly Budget"
+        BudgetLimit:
+          Amount: 15
+          Unit: USD
+        TimeUnit: MONTHLY
+        BudgetType: COST
+        CostTypes:
+          IncludeCredit: false
+      NotificationsWithSubscribers:
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: 20
+          Subscribers:
+          - SubscriptionType: SNS
+            Address: !Ref TextAlertTopic
+          - SubscriptionType: EMAIL
+            Address: !Ref EmailAddress
+
+  Budget40:
+    Type: "AWS::Budgets::Budget"
+    Properties:
+      Budget:
+        BudgetName: "$40 Monthly Budget"
+        BudgetLimit:
+          Amount: 35
+          Unit: USD
+        TimeUnit: MONTHLY
+        BudgetType: COST
+        CostTypes:
+          IncludeCredit: false
+      NotificationsWithSubscribers:
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: 40
+          Subscribers:
+          - SubscriptionType: SNS
+            Address: !Ref TextAlertTopic
+          - SubscriptionType: EMAIL
+            Address: !Ref EmailAddress
+
+  Budget60:
+    Type: "AWS::Budgets::Budget"
+    Properties:
+      Budget:
+        BudgetName: "$60 Monthly Budget"
+        BudgetLimit:
+          Amount: 55
+          Unit: USD
+        TimeUnit: MONTHLY
+        BudgetType: COST
+        CostTypes:
+          IncludeCredit: false
+      NotificationsWithSubscribers:
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: 60
+          Subscribers:
+          - SubscriptionType: SNS
+            Address: !Ref TextAlertTopic
+          - SubscriptionType: EMAIL
+            Address: !Ref EmailAddress
